@@ -43,6 +43,15 @@ canvas{width:100%;height:190px;display:block}
 input{font:inherit;width:100%;margin:8px 0;padding:9px 12px;border-radius:10px;border:1px solid var(--bd);background:#0007;color:var(--tx)}
 code{background:#0006;padding:1px 6px;border-radius:5px;color:var(--g)}
 .leg{display:flex;gap:14px;font-size:.75rem;color:var(--mut);margin-top:6px}.leg b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px}
+.fanrow{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.fanic{width:58px;height:58px;flex:none}.fanrow.on .fanic{animation:sp .6s linear infinite;filter:drop-shadow(0 0 8px var(--g))}
+@keyframes sp{to{transform:rotate(360deg)}}
+.fanrow h3{font-size:1.05rem}.fanrow p{color:var(--mut);font-size:.85rem;margin-top:2px}
+.lvs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.lvc{border:1px solid var(--bd);border-radius:14px;padding:12px;font-size:.82rem;color:var(--mut);line-height:1.45;opacity:.6;transition:.4s}
+.lvc.cur{opacity:1;border-color:var(--k);background:color-mix(in srgb,var(--k) 10%,transparent)}
+.lvc b{display:block;color:var(--k);font-size:.95rem;margin-bottom:2px}.lvc i{font-style:normal;font-size:.72rem}
+@media(max-width:850px){.lvs{grid-template-columns:1fr}}
 footer{text-align:center;color:var(--mut);font-size:.75rem;margin-top:24px}
 </style>
 </head>
@@ -74,6 +83,20 @@ footer{text-align:center;color:var(--mut);font-size:.75rem;margin-top:24px}
  <div class="card m"><div class="lbl">Humidity</div><div class="v"><span id="vh">--</span><span class="u"> %</span></div><div class="bar"><i id="bh"></i></div><div class="sub" id="sh">Ideal 40–60 %</div></div>
  <div class="card m"><div class="lbl">Stagnation Rate</div><div class="v"><span id="vd">--</span><span class="u"> AQ/min</span></div><div class="sub" id="sd">ΔAQ over last minute</div></div>
 
+ <div class="card wide" id="fanCard">
+  <div class="lbl">Auto-purifier (relay D1 · carbon filter fan)</div>
+  <div class="fanrow" id="fanrow" style="margin-top:10px">
+   <svg class="fanic" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="none" stroke="#ffffff22" stroke-width="2"/><g fill="var(--c)"><path d="M32 32C30 18 38 8 46 12c6 4 2 14-14 20zM32 32C46 30 56 38 52 46c-4 6-14 2-20-14zM32 32C34 46 26 56 18 52c-6-4-2-14 14-20zM32 32C18 34 8 26 12 18c4-6 14-2 20 14z"/></g><circle cx="32" cy="32" r="4" fill="#06141a"/></svg>
+   <div><h3 id="fanT">Fan OFF</h3><p id="fanP">Standby. Starts automatically at a score of 35 or more.</p></div>
+  </div>
+  <div class="lvs">
+   <div class="lvc" id="lv0" style="--k:var(--g)"><b>LOW · 0–34</b>Green LED, buzzer silent, fan off. Ventilation is healthy.</div>
+   <div class="lvc" id="lv1" style="--k:var(--y)"><b>MODERATE · 35–64</b>Yellow LED, beep every 12 s, fan starts scrubbing VOCs and odours.</div>
+   <div class="lvc" id="lv2" style="--k:var(--r)"><b>HIGH · 65–100</b>Red LED, beep every 2 s, fan continuous. Open windows now.</div>
+  </div>
+  <div class="sub" style="margin-top:10px">Score = air quality (60) + stagnation rate (20) + humidity penalty (15) + humidity spike (5). Carbon does not remove CO₂ or CO, so ventilate when risk is high.</div>
+ </div>
+
  <div class="card wide">
   <div class="lbl">Live trend</div><canvas id="ch" width="1000" height="190"></canvas>
   <div class="leg"><span><b style="background:var(--c)"></b>Risk score</span><span><b style="background:#6aa8ff"></b>AQI</span><span><b style="background:#ffa94d"></b>Humidity</span></div>
@@ -84,7 +107,7 @@ footer{text-align:center;color:var(--mut);font-size:.75rem;margin-top:24px}
   <div class="tabs"><button class="a" data-p="demo">🎮 Demo</button><button data-p="mqtt">☁️ Wi-Fi (Cloud)</button><button data-p="usb">🔌 USB Serial</button></div>
   <div class="pn a" id="p-demo">Simulated room. Press the button to “place the hood” over the sensor, like in your viva demo — watch risk climb in under a minute.<br><br><button class="btn p" id="hood">Place hood over sensor</button></div>
   <div class="pn" id="p-mqtt">The ESP8266 publishes readings to a free public MQTT broker; this page listens over secure WebSockets, so it works from anywhere (Netlify included). Use the <b>same topic</b> in the firmware.
-   <input id="topic" placeholder="Topic"><button class="btn p" id="cm">Connect</button></div>
+   <input id="broker" placeholder="Broker (WebSocket URL)"><input id="topic" placeholder="Topic"><button class="btn p" id="cm">Connect</button></div>
   <div class="pn" id="p-usb">Plug the NodeMCU into this computer and connect to read the JSON lines it prints over Serial (115200 baud). Works in Chrome / Edge on desktop &amp; Android.<br><br><button class="btn p" id="cu">Select USB port</button></div>
  </div>
 </div>
@@ -108,8 +131,19 @@ const TIPS={
 2:[['🚨','Ventilate immediately — exhaled aerosols are building up.'],['😷','Wear masks if the room must stay occupied.'],['🚪','Move people to a fresh-air area for 10–15 minutes.']]};
 let lastLv=-1;
 
+const K=(o,ks)=>{for(const k of ks)if(o[k]!=null&&o[k]!=='')return Number(o[k])};
+let prevRx=null;
+function norm(r){
+ const d={aq:K(r,['aq','gas','mq135','air']),t:K(r,['t','temp','temperature']),h:K(r,['h','hum','humidity']),
+  score:K(r,['score','risk','riskScore']),daq:K(r,['daq','dAQ']),dh:K(r,['dh','dH']),warm:r.warm,fan:r.fan??r.relay??r.purifier};
+ if(d.daq==null||d.dh==null){const n=Date.now();
+  if(prevRx&&n-prevRx.ts>500){const m=(n-prevRx.ts)/60000;if(d.daq==null)d.daq=(d.aq-prevRx.aq)/m;if(d.dh==null)d.dh=(d.h-prevRx.h)/m}
+  prevRx={aq:d.aq,h:d.h,ts:n}}
+ return d}
 function update(d){
+ if(mode!=='demo')d=norm(d);
  lastRx=Date.now();
+ if(isNaN(d.aq)||isNaN(d.h)||isNaN(d.t))return;
  d.daq=d.daq||0; d.dh=d.dh||0;
  const sc=d.score!=null?d.score:risk(d), lv=sc<35?0:sc<65?1:2, L=LV[lv];
  document.documentElement.style.setProperty('--c',L.c);
@@ -118,6 +152,10 @@ function update(d){
  $('badge').textContent=d.warm?'WARMING UP':L.n;
  ['lg','ly','lr'].forEach(k=>$(k).classList.toggle('on',k===L.k));
  $('alert').classList.toggle('show',lv===2&&!d.warm);
+ let fan=d.fan; fan=fan==null?sc>=35:(fan===true||fan===1||fan==='1'||String(fan).toUpperCase()==='ON');
+ $('fanrow').classList.toggle('on',fan);$('fanT').textContent=fan?'Fan RUNNING':'Fan OFF';
+ $('fanP').textContent=fan?'Pulling room air through the activated carbon pad.':'Standby. Starts automatically at a score of 35 or more.';
+ [0,1,2].forEach(i=>$('lv'+i).classList.toggle('cur',i===lv));
  $('vaq').textContent=Math.round(d.aq);$('baq').style.width=cl(d.aq/5,0,100)+'%';$('baq').style.background=L.c;
  $('saq').textContent=d.aq<100?'Good':d.aq<200?'Fair — getting stale':'Poor — ventilate';
  $('vt').textContent=d.t.toFixed(1);$('bt').style.width=cl((d.t-10)/30*100,0,100)+'%';
@@ -155,11 +193,12 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
 function setSt(t,on){$('st').textContent=t;$('dot').classList.toggle('on',on)}
 
 /* ---- Cloud (MQTT over WSS) ---- */
+$('broker').value=localStorage.getItem('saaBroker')||'wss://broker.hivemq.com:8884/mqtt';
 $('topic').value=localStorage.getItem('saaTopic')||'smartairadvisor/'+Math.random().toString(36).slice(2,8)+'/data';
 $('cm').onclick=()=>{
- const tp=$('topic').value.trim();localStorage.setItem('saaTopic',tp);
+ const tp=$('topic').value.trim();localStorage.setItem('saaTopic',tp);localStorage.setItem('saaBroker',$('broker').value.trim());prevRx=null;
  if(client)client.end(true);mode='mqtt';hist.length=0;setSt('Connecting…',false);
- client=mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+ client=mqtt.connect($('broker').value.trim());
  client.on('connect',()=>{client.subscribe(tp);setSt('Connected · waiting for prototype',true)});
  client.on('error',()=>setSt('Connection error',false));
  client.on('message',(_,m)=>{try{update(JSON.parse(m.toString()));setSt('Live · prototype online',true)}catch(e){}});
